@@ -758,6 +758,26 @@ class NPUModelRunner(GPUModelRunner):
         else:
             num_reqs_padded = batch_desc_num_reqs if batch_desc_num_reqs is not None else num_reqs
 
+        if (
+            self.speculative_config is not None
+            and self.speculative_config.uses_dynamic_speculative_decoding()
+        ):
+            valid_qls = sorted({
+                k + 1
+                for _, _, k in (
+                    self.speculative_config.num_speculative_tokens_per_batch_size or []
+                )
+                if k > 0
+            })
+        else:
+            valid_qls = [self.uniform_decode_query_len]
+        actual_ql = None
+        if num_reqs_padded > 0:
+            for ql in valid_qls:
+                if num_tokens_padded == num_reqs_padded * ql:
+                    actual_ql = ql
+                    break
+        
         # avoid corner case of cudagraph config mode FULL to enter the first padding logic
         # e.g. 1 request with 1 token when num_spec > 1 (num_spec = 3 and cudagraph_batch_size = 4 for example)
         # will cause tokens are padded but requests are not
