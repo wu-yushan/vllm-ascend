@@ -782,7 +782,7 @@ class NPUModelRunner(GPUModelRunner):
         # e.g. 1 request with 1 token when num_spec > 1 (num_spec = 3 and cudagraph_batch_size = 4 for example)
         # will cause tokens are padded but requests are not
         if (
-            num_tokens_padded == num_reqs_padded * self.uniform_decode_query_len
+            actual_ql is not None
             and self.compilation_config.cudagraph_mode != CUDAGraphMode.FULL
         ):
             # Uniform-batch case: num_reqs must be no greater than num_reqs_padded
@@ -790,7 +790,7 @@ class NPUModelRunner(GPUModelRunner):
 
             last_loc = query_start_loc.np[num_reqs]
             query_start_loc.np[num_reqs + 1 : num_reqs_padded + 1] = (
-                self.arange_np[1 : num_reqs_padded + 1 - num_reqs] * self.uniform_decode_query_len + last_loc
+                self.arange_np[1 : num_reqs_padded + 1 - num_reqs] * actual_ql + last_loc
             )
         else:
             # Mixed-batch case: num_reqs must equal num_reqs_padded
@@ -2985,15 +2985,23 @@ class NPUModelRunner(GPUModelRunner):
     ) -> tuple[CUDAGraphMode, BatchDescriptor, bool, torch.Tensor | None, CUDAGraphStat | None]:
         num_tokens_padded = self._pad_for_sequence_parallelism(num_tokens)
         is_all_decode = np.all(self.input_batch.num_computed_tokens_cpu[:num_reqs] > 0)
-        uniform_decode = (
-            (
-                (is_all_decode if self.speculative_config else True)
-                and (max_num_scheduled_tokens == self.uniform_decode_query_len)
-                and (num_tokens == max_num_scheduled_tokens * num_reqs)
-            )
-            if force_uniform_decode is None
-            else force_uniform_decode
-        )
+        _is_dsd = (self.speculative_config is not None
+                   and self.speculative_config.uses_dynamic_speculative_decoding())
+        if force_uniform_decode is None:
+            if _is_dsd:
+                uniform_decode = (
+                    (is_all_decode if self.speculative_config else True)
+                    and (num_tokens == max_num_scheduled_tokens * num_reqs)
+                )
+            else:
+                uniform_decode = (
+                    (is_all_decode if self.speculative_config else True)
+                    and (max_num_scheduled_tokens == self.uniform_decode_query_len)
+                    and (num_tokens == max_num_scheduled_tokens * num_reqs)
+                )
+        else:
+            uniform_decode = force_uniform_decode
+
         # Encoder-decoder models only support CG for decoder_step > 0 (no enc_output
         # is present). Also, chunked-prefill is disabled, so batch are uniform.
         has_encoder_output = self.model_config.is_encoder_decoder and num_encoder_reqs > 0
@@ -3008,7 +3016,7 @@ class NPUModelRunner(GPUModelRunner):
         def dispatch_cudagraph(num_tokens, disable_full=False, valid_modes=None):
             if force_eager:
                 return (CUDAGraphMode.NONE, BatchDescriptor(num_tokens_padded))
-
+            self.cudagraph_dispatcher._dsd_num_reqs = num_reqs
             return self.cudagraph_dispatcher.dispatch(
                 num_tokens=num_tokens,
                 has_lora=has_lora,
