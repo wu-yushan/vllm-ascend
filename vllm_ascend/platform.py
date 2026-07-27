@@ -548,6 +548,7 @@ class NPUPlatform(Platform):
             vllm_config.parallel_config.tensor_parallel_size > 1
             and not vllm_config.model_config.enforce_eager
             and enable_sp(vllm_config)
+            and compilation_config.cudagraph_capture_sizes  # [LOCAL] eager draft model has empty capture sizes; nothing to SP-filter
         ):
             original_sizes = compilation_config.cudagraph_capture_sizes
             sp_aclgraph_sizes = vllm_config.update_sizes_for_sequence_parallelism(original_sizes)

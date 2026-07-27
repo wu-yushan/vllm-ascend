@@ -1695,6 +1695,9 @@ class NPUModelRunner(GPUModelRunner):
         sample_hidden_states: torch.Tensor = None,
         target_model_batch_desc: BatchDescriptor = None,
     ) -> list[list[int]] | None:
+        # [DSD] K=0 is now handled inside _propose: it runs a 1-token
+        # keep-alive forward to keep the draft KV in sync, then returns an
+        # empty [batch, 0] draft tensor. No short-circuit needed here.
         if not self.drafter:
             # Speculative decoding is not enabled.
             draft_token_ids = None
