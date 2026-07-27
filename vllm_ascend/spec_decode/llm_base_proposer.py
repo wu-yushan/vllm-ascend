@@ -177,10 +177,6 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         self.dcp_size = self.runner.dcp_size
         self.pcp_rank = self.runner.pcp_rank
         self.dcp_rank = self.runner.dcp_rank
-        # Cache TP rank for hot-path logging; avoid repeated
-        # get_tp_group() calls which are expensive in TP>1.
-        self.tp_rank = get_tp_group().rank_in_group if get_tp_group() is not None else -1
-
         self.full_indices = range(
             self.runner.max_num_tokens * self.pcp_size * self.dcp_size
             + self.pcp_size * self.dcp_size * self.runner.max_num_reqs
@@ -776,60 +772,6 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         else:
             _step_k = self.num_speculative_tokens
 
-        # [DSD] debug: log only on tier transitions to confirm the drafter
-        # honors the per-step K from the scheduler.
-        _log_k = 0 if _dsd_k0 else _step_k
-        _prev_sched_k = getattr(self, "_dsd_last_sched_k", self.num_speculative_tokens)
-
-        # Hysteresis: require consecutive same-K steps before committing a
-        # transition. This prevents single-step oscillation (e.g. 3→1→3
-        # within one second when batch-size hovers around a tier boundary),
-        # which would otherwise trigger repeated graph recompilation +
-        # AllGather round-trips that can hang the engine under KV pressure.
-        _HYSTERESIS_STEPS = 3
-        _pending_k = getattr(self, "_dsd_pending_k", _prev_sched_k)
-        _pending_cnt = getattr(self, "_dsd_pending_cnt", 0)
-
-        if _log_k != _prev_sched_k:
-            # Scheduler wants a different K — require confirmation
-            if _log_k == _pending_k:
-                _pending_cnt += 1
-            else:
-                _pending_k = _log_k
-                _pending_cnt = 1
-
-            if _pending_cnt >= _HYSTERESIS_STEPS:
-                # Confirmed: commit the transition
-                _dsd_transition = True
-                _log_k = _pending_k
-                _pending_k = _log_k
-                _pending_cnt = 0
-            else:
-                # Not yet confirmed: suppress transition, stay at old K
-                _log_k = _prev_sched_k
-                _dsd_transition = False
-        else:
-            # Scheduler agrees with current K — reset pending state
-            _pending_k = _prev_sched_k
-            _pending_cnt = 0
-            _dsd_transition = False
-
-        self._dsd_pending_k = _pending_k
-        self._dsd_pending_cnt = _pending_cnt
-
-        if _dsd_transition:
-            # K changed: clear all persistent per-draft-index buffers
-            # so stale slot_mapping/seq_lens/query_start_loc from the
-            # previous K do not leak into the new step's metadata.
-            for _g in self.slot_mapping_group:
-                _g.fill_(0)
-            for _g in self.seq_lens_group:
-                _g.fill_(0)
-            for _g in self.query_start_loc_group:
-                _g.fill_(0)
-            self._dsd_last_sched_k = _log_k
-        self._dsd_last_step_k = _log_k
-
         if token_indices_to_sample is None:
             token_indices_to_sample = common_attn_metadata.query_start_loc[1:] - 1
 
@@ -949,17 +891,9 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
                 self.runner.pcp_manager.pcp_allgather_restore_idx.gpu[pcp_allgather_restore_idx.shape[0] :] = 0
         else:
             num_reqs_padded = common_attn_metadata.num_reqs
-            if _dsd_transition:
-                # K changed: use the runner's fresh block_table
-                # (authoritative for active requests) instead of
-                # cloning stale data from the old K's batch layout.
-                _bt = self.runner.input_batch.block_table[self.kv_cache_gid].get_device_tensor()
-                common_attn_metadata.block_table_tensor = self._adjust_tensor(
-                    _bt, num_reqs_padded
-                )
-            else:
-                # Steady state: adjust the existing block_table
-                # to match the current num_reqs_padded.
+            # In the below scenario, padding has been applied by _pad_query_start_loc_for_fia in the model runner.
+            # We need to unpad here for eager mode to maintain compatibility.
+            if not self.vllm_config.model_config.use_mla and self.pcp_size * self.dcp_size == 1:
                 common_attn_metadata.block_table_tensor = self._adjust_tensor(
                     common_attn_metadata.block_table_tensor, num_reqs_padded
                 )

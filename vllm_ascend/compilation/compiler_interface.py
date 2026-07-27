@@ -196,7 +196,7 @@ def npugraph_ex_compile(
                         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                         with open(cache_path, "w") as f:
                             f.write(py_code)
-                        logger.debug("Saved compiled graph to cache: %s", cache_path)
+                        logger.info("Saved compiled graph to cache: %s", cache_path)
             return compiled_gm
 
         nfx._NpuFxCompiler._get_compiled_gm = patched_get_compiled_gm
