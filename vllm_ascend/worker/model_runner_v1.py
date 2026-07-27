@@ -3405,6 +3405,45 @@ class NPUModelRunner(GPUModelRunner):
         return force_attention or cudagraph_runtime_mode == CUDAGraphMode.FULL
 
     @torch.inference_mode()
+    def _warmup_and_capture(
+        self,
+        desc: BatchDescriptor,
+        cudagraph_runtime_mode: CUDAGraphMode,
+        profile_seq_lens: int | None = None,
+        allow_microbatching: bool = True,
+        num_warmups: int | None = None,
+    ) -> None:
+        if num_warmups is None:
+            num_warmups = self.compliation_config.cudagraph_num_of_warmups
+        force_attention = cudagraph_runtime_mode == CUDAGraphMode.FULL
+        force_num_reqs = desc.num_reqs
+        for _ in range(num_warmups):
+            self._dummy_run(
+                desc.num_tokens,
+                cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                force_attention=force_attention,
+                uniform_decode=desc.uniform,
+                allow_microbatching=allow_microbatching,
+                skip_eplb=True,
+                remove_lora=False,
+                num_active_loras=desc.num_active_loras,
+                profile_seq_lens=profile_seq_lens,
+                force_num_reqs=force_num_reqs,
+            )
+        self._dummy_run(
+            desc.num_tokens,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+            uniform_decode=desc.uniform,
+            allow_microbatching=allow_microbatching,
+            skip_eplb=True,
+            remove_lora=False,
+            num_active_loras=desc.num_active_loras,
+            is_graph_capturing=True,
+            profile_seq_lens=profile_seq_lens,
+            force_num_reqs=force_num_reqs,
+        )
+
+        
     def _dummy_run(
         self,
         num_tokens: int,
@@ -3421,6 +3460,7 @@ class NPUModelRunner(GPUModelRunner):
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
         profile_cpp: bool = False,
+        force_num_reqs: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # only support eager mode and piecewise graph now
         assert cudagraph_runtime_mode is None or cudagraph_runtime_mode.valid_runtime_modes()
