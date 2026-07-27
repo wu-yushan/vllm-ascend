@@ -1093,11 +1093,8 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
                 draft_token_ids = run_draft()
                 self._update_full_graph_params_if_needed(forward_context, num_input_tokens, multi_steps_attn_metadata)
 
-        # K=0 keep-alive: the 1-token forward above has already advanced the
-        # draft KV cache, keeping it in sync. Discard all produced drafts and
-        # return an empty [batch_size, 0] tensor so the caller sees zero
-        # speculative tokens for this step. When K recovers to >0 on a later
-        # step the draft KV will be consistent.
+        # K=0: draft KV already advanced by keep-alive forward above;
+        # discard drafts and return empty tensor.
         if _dsd_k0:
             draft_token_ids = draft_token_ids[:, :0]
 
