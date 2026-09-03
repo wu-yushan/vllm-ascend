@@ -190,16 +190,16 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         # the target model's graph-mode setting untouched.
         # TODO(lilinsiman): Remove this code segment after future versions of the GLM
         # series models support graph input for speculative inference.
-        if _is_glm_model(self.vllm_config.model_config):
-            if self.use_cuda_graph:
-                logger.warning(
-                    "GLM series models with speculative decoding currently do "
-                    "not support graph mode. The draft model has been "
-                    "automatically switched to eager mode "
-                    "(enforce_eager=true). Graph mode support for GLM "
-                    "speculative decoding will be added in a future release. "
-                )
-            self.use_cuda_graph = False
+        # if _is_glm_model(self.vllm_config.model_config):
+        #     if self.use_cuda_graph:
+        #         logger.warning(
+        #             "GLM series models with speculative decoding currently do "
+        #             "not support graph mode. The draft model has been "
+        #             "automatically switched to eager mode "
+        #             "(enforce_eager=true). Graph mode support for GLM "
+        #             "speculative decoding will be added in a future release. "
+        #         )
+        #     self.use_cuda_graph = False
 
         # TODO: Remove it when the bug of fx-graph is solved
         self.maybe_eager_context: AbstractContextManager[Any] = nullcontext()
