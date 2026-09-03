@@ -24,7 +24,6 @@ from vllm_ascend.ops.triton.spec_decode.utils import (
     copy_and_expand_dflash_and_dspark_inputs_kernel_single_grid,
 )
 from vllm_ascend.spec_decode.dflash_proposer import AscendDflashProposer
-from vllm_ascend.spec_decode.utils import DynamicSpecScheduler
 from vllm_ascend.transformers_utils.configs.kimi_k3 import (
     K3_DSPARK_USE_MLA_ROPE,
     K3DSparkConfig,
@@ -90,31 +89,7 @@ class AscendDSparkProposer(AscendDflashProposer):
             dtype=self.dtype,
             device=self.device,
         )
-        dynamic_spec_config = get_ascend_config().dynamic_spec_config
-        self.dynamic_spec = None
-
-        if dynamic_spec_config.method == "dspark":
-            self.dynamic_spec = DynamicSpecScheduler(
-                method="dspark",
-                method_params=dynamic_spec_config.method_params,
-                max_batch_size=self.max_batch_size,
-                num_speculative_tokens=self.num_speculative_tokens,
-                device=device,
-            )
-        # Dynamic verify-length performs a periodic host synchronization and
-        # therefore cannot be captured together with the query-block graph.
-        # Preserve the base proposer's ACLGraph decision for static DSpark.
         self.use_cuda_graph = getattr(self, "use_cuda_graph", False)
-        if dynamic_spec_config.method == "dspark" and self.use_cuda_graph:
-            logger.warning(
-                "DSpark dynamic verify-length is not compatible with ACLGraph; "
-                "the draft model is falling back to eager mode."
-            )
-            self.use_cuda_graph = False
-        # FULL graph buckets follow the target verification width (1 + N),
-        # while sample-from-anchor DSpark has only N real query tokens. Keep
-        # room for the virtual request that pads the draft query block to the
-        # target graph bucket.
         self.max_query_tokens = self.max_batch_size * (1 + self.num_speculative_tokens)
         # Position ids for the draft query block [max_query_tokens].
         # Overrides dflash:49; v2 uses input_buffers.positions.
